@@ -1,0 +1,31 @@
+pdfminer.six>=20231228
+PyMuPDF>=1.24.0
+pdf2image>=1.17.0
+pytesseract>=0.3.10
+regex>=2023.12.25
+sentencepiece>=0.2.0
+ipykernel>=6.29.11
+numpy>=1.26.0,<2.0.0
+matplotlib>=3.8.0
+tqdm>=4.66.0
+sentence-transformers>=2.7.0,<3.0.0
+# transformers 4.46+ requires PyTorch >= 2.1 (otherwise AutoModel* is a dummy and import fails).
+# Install torch for your CUDA from https://pytorch.org/get-started/locally/ e.g.:
+#   pip install "torch>=2.1.0" --index-url https://download.pytorch.org/whl/cu118
+# PEFT 0.18+ needs newer transformers (e.g. DynamicCache in top-level API).
+transformers>=4.46.0,<5.0.0
+peft>=0.13.0
+accelerate>=0.34.0
+pinecone>=5.0.1
+python-dotenv>=1.0.1
+openai>=1.40.0
+langgraph>=0.2.40
+flask>=3.0.0
+ipykernel>=6.29.11
+
+# PaddleOCR-VL doc parser (https://huggingface.co/PaddlePaddle/PaddleOCR-VL)
+# GPU default (CUDA 12.6 example from model card):
+paddlepaddle-gpu==3.2.1    # install from https://www.paddlepaddle.org.cn/packages/stable/cu126/
+paddleocr[doc-parser]>=3.4.0
+# If you want CPU-only instead, uninstall paddlepaddle-gpu and install:
+#   pip install paddlepaddle>=3.2.0

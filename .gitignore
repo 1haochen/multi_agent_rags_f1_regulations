@@ -1,0 +1,37 @@
+# data: ignore contents; track folder via .gitkeep
+data/*
+!data/.gitkeep
+
+# all pycache folder in any subfolder, such as src/ocr/__pycache__/
+src/ocr/__pycache__/
+src/regulations_chunking/__pycache__/
+src/rag/__pycache__/
+src/regulations_chunking/__pycache__/
+
+# example chunked folder
+example_chunked/
+
+# demo_chunking.py output
+demo_chunking.py_output/
+
+# notebooks folder
+notebooks/
+
+# notebooks folder
+notebooks/
+
+# notebooks folder
+notebooks/
+
+# chunks: ignore contents like data/; track folder via .gitkeep
+chunks/*
+!chunks/.gitkeep
+
+.env
+
+.venv/
+
+
+# checkpoints lora folder
+models/Qwen2.5-1.5B-lora/checkpoint-*/
+

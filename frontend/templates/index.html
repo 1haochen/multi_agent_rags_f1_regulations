@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>F1 Regulations Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header__brand">
+        <div class="header__logo" aria-hidden="true">
+          <span class="header__logo-mark"></span>
+        </div>
+        <div class="header__titles">
+          <h1 class="header__title">Regulations Assistant</h1>
+          <p class="header__subtitle">Multi-agent RAG · FIA Formula 1</p>
+        </div>
+      </div>
+      <div class="header__stripe" aria-hidden="true"></div>
+    </header>
+
+    <main class="chat" id="chat" aria-live="polite">
+      <div class="chat__welcome" id="welcome">
+        <p class="chat__welcome-lead">Ask about F1 financial and sporting regulations.</p>
+        <p class="chat__welcome-hint">Follow-ups work in this session—try “What about clause E1.2?” after your first question.</p>
+      </div>
+    </main>
+
+    <div class="composer-wrap">
+      <div class="composer-tools">
+        <div class="synth-field" id="synth-field">
+          <span class="synth-field__label" id="synth-field-label">Answer synthesis</span>
+          <div
+            class="synth-switch"
+            role="radiogroup"
+            aria-labelledby="synth-field-label"
+          >
+            <button
+              type="button"
+              class="synth-switch__opt synth-switch__opt--active"
+              id="synth-openai"
+              data-synthesizer="openai"
+              role="radio"
+              aria-checked="true"
+            >
+              <span class="synth-switch__title">GPT-4o</span>
+              <span class="synth-switch__sub">Cloud · gpt-4o-mini</span>
+            </button>
+            <button
+              type="button"
+              class="synth-switch__opt"
+              id="synth-qwen"
+              data-synthesizer="local_qwen"
+              role="radio"
+              aria-checked="false"
+            >
+              <span class="synth-switch__title">Qwen</span>
+              <span class="synth-switch__sub">Local · fine-tuned LoRA</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <form class="composer" id="composer-form" autocomplete="off">
+        <label class="sr-only" for="user-input">Your question</label>
+        <textarea
+          id="user-input"
+          class="composer__input"
+          rows="1"
+          placeholder="Ask a regulation question…"
+          maxlength="8000"
+        ></textarea>
+        <button type="submit" class="composer__send" id="send-btn" aria-label="Send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </form>
+      <p class="composer__disclaimer">Answers use retrieved regulation text only. Verify critical wording against official FIA documents.</p>
+    </div>
+  </div>
+
+  <template id="tpl-user-bubble">
+    <div class="msg msg--user">
+      <div class="msg__bubble msg__bubble--user"></div>
+    </div>
+  </template>
+
+  <template id="tpl-assistant-bubble">
+    <div class="msg msg--assistant">
+      <div class="msg__avatar" aria-hidden="true">
+        <span class="msg__avatar-inner">F1</span>
+      </div>
+      <div class="msg__col">
+        <div class="msg__bubble msg__bubble--assistant">
+          <div class="msg__thinking" hidden>
+            <div class="telemetry" aria-hidden="true">
+              <div class="telemetry__track"></div>
+              <div class="telemetry__car"></div>
+            </div>
+            <p class="msg__thinking-label">Analyzing regulations…</p>
+          </div>
+          <div class="msg__body"></div>
+          <div class="msg__meta" hidden></div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}" type="module"></script>
+</body>
+</html>
