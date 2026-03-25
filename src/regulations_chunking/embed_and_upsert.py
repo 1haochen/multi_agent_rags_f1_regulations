@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tupl
 from dotenv import load_dotenv
 from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
+from tqdm import tqdm
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -179,7 +180,7 @@ def load_records(
 ) -> Tuple[List[ChunkRecord], int]:
     records: List[ChunkRecord] = []
     skipped = 0
-    for path in chunk_files:
+    for path in tqdm(chunk_files, desc="[load] reading chunk files", unit="file"):
         rel_source = str(path.relative_to(input_root))
         with path.open("r", encoding="utf-8") as f:
             for row_idx, line in enumerate(f):
@@ -308,7 +309,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         raise RuntimeError("Could not determine embedding dimension from model.")
 
     vectors: List[Dict[str, Any]] = []
-    for group in batched(records, args.embed_batch_size):
+    embed_batches_total = (len(records) + args.embed_batch_size - 1) // args.embed_batch_size
+    for group in tqdm(
+        batched(records, args.embed_batch_size),
+        total=embed_batches_total,
+        desc="[embed] encoding",
+        unit="batch",
+    ):
         passages = [f"passage: {r.text}" for r in group]
         embeds = model.encode(
             passages,
@@ -364,15 +371,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     index = pc.Index(name=index_name, host=host) if host else pc.Index(name=index_name)
     upserted = 0
-    for group in batched(vectors, args.upsert_batch_size):
-        with_retries_upsert(
-            index=index,
-            vectors=list(group),
-            namespace=namespace,
-            max_retries=args.max_retries,
-        )
-        upserted += len(group)
-        print(f"[upsert] {upserted}/{len(vectors)}")
+    upsert_total = len(vectors)
+    with tqdm(total=upsert_total, desc="[upsert] upserting", unit="vec") as pbar:
+        for group in batched(vectors, args.upsert_batch_size):
+            with_retries_upsert(
+                index=index,
+                vectors=list(group),
+                namespace=namespace,
+                max_retries=args.max_retries,
+            )
+            upserted += len(group)
+            pbar.update(len(group))
 
     print(
         f"[done] upserted={upserted} namespace={namespace or '(default)'} "

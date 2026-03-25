@@ -107,7 +107,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     success = 0
     failed = 0
 
-    for src in inputs:
+    for src in tqdm(inputs, desc="[run_chunking] chunking", unit="file"):
         dst = output_path_for(src, input_dir, output_dir)
         try:
             n = process_file(src, dst)
