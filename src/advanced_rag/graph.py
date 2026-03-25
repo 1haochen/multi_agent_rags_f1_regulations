@@ -60,7 +60,12 @@ def build_advanced_rag_graph(
             return END
         if state.get("retry_count", 0) >= 1:
             return END
-        return "retriever_agent"
+        # Retry should go back through planning so any new hint/IDs can affect retrieval.
+        return "query_planner_agent"
 
-    graph.add_conditional_edges("answer_check_agent", _route_after_check, {END: END, "retriever_agent": "retriever_agent"})
+    graph.add_conditional_edges(
+        "answer_check_agent",
+        _route_after_check,
+        {END: END, "query_planner_agent": "query_planner_agent"},
+    )
     return graph.compile()

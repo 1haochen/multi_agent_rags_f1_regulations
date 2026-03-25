@@ -65,7 +65,14 @@ class HybridRetriever:
             chunks_root=chunks_root,
         )
 
-    def retrieve_references_from_pinecone(self, refs: List[str], *, limit: int = 6) -> List[ChunkDocObj]:
+    def retrieve_references_from_pinecone(
+        self,
+        refs: List[str],
+        *,
+        limit: int = 6,
+        source: str = "reference",
+        score_boost: float = 0.0,
+    ) -> List[ChunkDocObj]:
         """
         Expand context by retrieving referenced clause/article/appendix IDs from Pinecone metadata.
 
@@ -88,10 +95,10 @@ class HybridRetriever:
                 docs.append(
                     ChunkDocObj(
                         id=h.id,
-                        score=float(h.score),
+                        score=float(h.score) + float(score_boost),
                         text=h.text or "",
                         metadata=h.metadata,
-                        source="reference",
+                        source=source,
                     )
                 )
                 if len(docs) >= limit:
@@ -112,7 +119,13 @@ class HybridRetriever:
             if (r.text or "").strip()
         ]
         # Expand any explicit IDs (clause/article/appendix) via Pinecone metadata filters only.
-        exact_docs = self.retrieve_references_from_pinecone(explicit_ids, limit=max(2, top_k // 2))
+        # Make exact-ID hits sticky by applying a score boost.
+        exact_docs = self.retrieve_references_from_pinecone(
+            explicit_ids,
+            limit=max(2, top_k // 2),
+            source="exact",
+            score_boost=1.0,
+        )
         merged: Dict[str, ChunkDocObj] = {}
         for d in sem_docs + exact_docs:
             if d.id not in merged or d.score > merged[d.id].score:

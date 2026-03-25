@@ -129,6 +129,8 @@ Implementation pointers:
 - **Notebook**: `evaluation.ipynb`
 - **Example output**: `eval_basic_vs_advanced_openai.csv`
 
+Questions come from [`test_questions.md`](test_questions.md): markdown lines that start with `*` (bullet list items). The notebook takes the **last 20** such lines (`N_QUESTIONS = 20`). In the current file, those are exactly the bullets under **## Messy / vague user-style questions (keywords not obvious)** (10 prompts with informal wording and non-obvious keywords) and **## Scenario-style questions (test retrieval with indirect wording)** (10 prompts framed as mini-scenarios rather than direct clause lookups)—together they stress **F1 financial / Power Unit–style regulation** QA without spelling out article IDs. The notebook compares **baseline RAG** vs **advanced LangGraph RAG** with an LLM judge, **context-locked fact-check** (claim extraction + verification against each system’s retrieved chunks), combined **final score** (judge score × fact multiplier), and retrieval metrics (**precision@k**, **recall@k**, **MRR** at `TOP_K`, with advanced retrieval scored on **final context** chunks). Re-run the eval cells after changing `TOP_K` or the question set.
+
 ---
 
 ## File structure (high level)
@@ -228,3 +230,11 @@ Notes:
 
 - Pinecone: [Python client](https://docs.pinecone.io/)
 - PaddleOCR-VL: [Hugging Face model card](https://huggingface.co/PaddlePaddle/PaddleOCR-VL)
+
+---
+
+## Future work
+
+One direction is a **search or research agent** layered on top of the current regulation RAG: not for “look up this rule,” but **scenario-grounded questions** that need external or structured facts first, then **tie those facts back to the regulations**. 
+
+Examples: budget or spending questions for a **named team or manufacturer** (e.g. Cadillac), or **hypothetical conduct** for a named person (e.g. “Lewis Hamilton did X under rule Y—would that be penalized?”). The agent would retrieve **scenario-specific information** (news, team pages, sporting summaries, or curated datasets where licensing allows), then **plug distilled facts into the existing clause retrieval** so answers stay anchored to the indexed FIA text while reflecting the user’s concrete situation.

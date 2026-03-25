@@ -106,3 +106,31 @@ If you only want a compact test set of 10, I’d use these:
 10. How do Article E3 exclusions interact with Article E4 adjustments?
 
 If you want, I can turn these into a cleaner evaluation sheet with columns like question, expected article, expected clause, and difficulty.
+
+
+## Messy / vague user-style questions (keywords not obvious)
+
+* I'm trying to figure out whether I'm even in the right ruleset. Who is this framework meant for?
+* When does this all become effective, like what "start date" should I use for planning?
+* If someone challenges my interpretation, who is the authority that actually applies the rules?
+* Can you explain the big picture goal of these rules without quoting the text?
+* For a team in their first season, what kind of spending limit do they use, and how is it calculated?
+* If my spending is split across different parts of the business, how do I decide what to ignore versus what to include?
+* What are the typical categories of costs that usually get left out of the calculation?
+* If an employee gets bonuses as part of a salary plan, is there a cap on what we can treat as excluded?
+* Are staff travel and competition-related trips treated the same way as other business travel?
+* What happens if a category of cost looks similar to something excluded - how strict is the treatment?
+
+## Scenario-style questions (test retrieval with indirect wording)
+
+* A constructor tells me they only kept a certain portion of their activity focused on the relevant program (less than "most of it"). What rule applies to them and what changes in their reporting?
+* A team buys fuel from a third-party supplier but the price varies. How do the regulations handle the value used for that purchase in the cost calculation?
+* An organization has a split operation where some work supports the racing program and some work supports everything else. What should they do when the expenses can't be neatly separated?
+* A manufacturer uses an accounting approach where research & development is booked in one period but benefits another. How are those costs treated across reporting periods?
+* During the season, a company charges "related parties" for certain services. How do the regulations treat those amounts when computing the figure that is subject to limits?
+* A manufacturer excludes certain costs early on, but later there is a reconciliation mechanism that can adjust the excluded amounts. In practical terms, what kind of later adjustment can affect earlier exclusions?
+* In a given reporting cycle, what should a team do if they're unsure which group(s) they belong to for the purposes of reporting?
+* A team's budget includes entertainment and hospitality expenses for staff. Is every expense treated the same way, or is there a limit for what can be treated as excluded?
+* A manufacturer has inventories on the books; later those inventories are written down. If they are reused later, what does the framework say to do?
+* Someone asks whether legal, property, depreciation, and taxes all follow the same "left out" logic. What does the rule treatment look like at a category level?
+

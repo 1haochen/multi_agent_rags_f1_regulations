@@ -63,10 +63,22 @@ def _render_chunks(chunks: List[ChunkDoc], max_chars: int = 9000) -> str:
 
 
 def conversation_memory_node(state: AdvancedRagState, *, client: OpenAI, model: str) -> Dict[str, Any]:
+    # Guardrail: if there is no meaningful chat history, don't rewrite.
+    # This reduces rewrite drift in single-turn evaluation/questions.
+    chat_history = state.get("chat_history", []) or []
+    if len(chat_history) < 2:
+        return {
+            "is_follow_up": False,
+            "resolved_query": str(state["user_query"]),
+            "active_topic": str(state.get("active_topic", "")),
+            "active_article_ids": list(state.get("active_article_ids", [])),
+            "active_clause_ids": list(state.get("active_clause_ids", [])),
+        }
+
     user = json.dumps(
         {
             "user_query": state["user_query"],
-            "chat_history": state.get("chat_history", []),
+            "chat_history": chat_history,
             "active_topic": state.get("active_topic", ""),
             "active_article_ids": state.get("active_article_ids", []),
             "active_clause_ids": state.get("active_clause_ids", []),
@@ -96,8 +108,14 @@ def query_planner_node(state: AdvancedRagState, *, client: OpenAI, model: str) -
     data = _json_response(client, model=model, system=QUERY_PLANNER_PROMPT, user=user)
     likely_ids = list(data.get("likely_ids") or [])
     likely_ids.extend(extract_ids(state["resolved_query"]))
+    # Guardrail: ensure any explicit IDs in the user's query are preserved in the rewritten query.
+    rewritten = str(data.get("rewritten_query") or state["resolved_query"]).strip()
+    explicit = extract_ids(state["resolved_query"])
+    missing = [x for x in explicit if x.lower() not in rewritten.lower()]
+    if missing:
+        rewritten = f"{rewritten} (Refs: {', '.join(missing)})".strip()
     return {
-        "rewritten_query": str(data.get("rewritten_query") or state["resolved_query"]),
+        "rewritten_query": rewritten,
         "query_type": str(data.get("query_type") or "direct_lookup"),
         "needs_reference_expansion": bool(data.get("needs_reference_expansion", False)),
         "active_clause_ids": list(dict.fromkeys(state.get("active_clause_ids", []) + likely_ids)),
@@ -113,6 +131,9 @@ def retriever_node(state: AdvancedRagState, *, retriever: Any, top_k: int) -> Di
 
 def relevance_judge_node(state: AdvancedRagState, *, client: OpenAI, model: str) -> Dict[str, Any]:
     chunks = state.get("retrieved_chunks", [])
+    if not chunks:
+        return {"filtered_chunks": []}
+
     payload = json.dumps(
         {
             "query": state["resolved_query"],
@@ -125,14 +146,59 @@ def relevance_judge_node(state: AdvancedRagState, *, client: OpenAI, model: str)
     )
     data = _json_response(client, model=model, system=RELEVANCE_JUDGE_PROMPT, user=payload)
     kept_ids = set(data.get("kept_ids") or [])
-    if not kept_ids:
-        ranked = sorted(chunks, key=lambda c: c["score"], reverse=True)
-        return {"filtered_chunks": ranked[: min(5, len(ranked))]}
-    return {"filtered_chunks": [c for c in chunks if c["id"] in kept_ids]}
+    labels = data.get("labels") or {}
+    label_by_id: Dict[str, str] = {}
+    if isinstance(labels, dict):
+        for k, v in labels.items():
+            if k is None:
+                continue
+            label_by_id[str(k)] = str(v or "")
+
+    # Target: keep K (avoid brittle hard-filter).
+    k = int(state.get("top_k", 5) or 5)
+    k = max(1, k)
+
+    def _label_boost(cid: str) -> float:
+        lab = (label_by_id.get(cid, "") or "").strip().lower()
+        if lab == "highly_relevant":
+            return 0.25
+        if lab == "partially_relevant":
+            return 0.08
+        if lab == "irrelevant":
+            return -0.25
+        # If LLM didn't label, don't change.
+        return 0.0
+
+    def _kept_bonus(cid: str) -> float:
+        # If the LLM explicitly kept it, treat as a light positive signal.
+        return 0.15 if (kept_ids and cid in kept_ids) else 0.0
+
+    ranked = sorted(
+        chunks,
+        key=lambda c: float(c.get("score", 0.0) or 0.0) + _label_boost(str(c.get("id", ""))) + _kept_bonus(str(c.get("id", ""))),
+        reverse=True,
+    )
+    return {"filtered_chunks": ranked[: min(k, len(ranked))]}
 
 
 def reference_resolver_node(state: AdvancedRagState, *, client: OpenAI, model: str, retriever: Any) -> Dict[str, Any]:
     filtered = state.get("filtered_chunks", [])
+    if not filtered:
+        return {
+            "extracted_references": [],
+            "referenced_chunks": [],
+            "final_context_chunks": [],
+        }
+
+    # Gate reference expansion to avoid adding noise for simple lookups.
+    query_type = str(state.get("query_type", "") or "")
+    needs_ref = bool(state.get("needs_reference_expansion", False))
+    has_crossref_language = any(
+        any(tok in (c.get("text", "").lower()) for tok in ("pursuant to", "see article", "see appendix", "as defined", "in accordance with"))
+        for c in filtered
+    )
+    do_expand = needs_ref or query_type == "cross_reference_reasoning" or has_crossref_language
+
     payload = json.dumps(
         {
             "query": state["resolved_query"],
@@ -140,21 +206,40 @@ def reference_resolver_node(state: AdvancedRagState, *, client: OpenAI, model: s
         },
         ensure_ascii=True,
     )
-    data = _json_response(client, model=model, system=REFERENCE_RESOLVER_PROMPT, user=payload)
+    data = _json_response(client, model=model, system=REFERENCE_RESOLVER_PROMPT, user=payload) if do_expand else {}
     refs = list(data.get("references") or [])
     # Regex fallback catches explicit clause/article mentions.
     for c in filtered:
         refs.extend(extract_ids(c["text"]))
     refs = list(dict.fromkeys(refs))
-    ref_docs = retriever.retrieve_references_from_pinecone(refs, limit=6) if refs else []
+    ref_docs = retriever.retrieve_references_from_pinecone(refs, limit=6) if (do_expand and refs) else []
     referenced_chunks = [_obj_to_doc(x) for x in ref_docs]
     merged: Dict[str, ChunkDoc] = {c["id"]: c for c in filtered}
     for c in referenced_chunks:
         merged[c["id"]] = c
+
+    refset = {r.lower() for r in refs}
+
+    def _ref_boost(c: ChunkDoc) -> float:
+        md = c.get("metadata", {}) or {}
+        ids = {
+            str(md.get("parent_clause_id") or "").lower(),
+            str(md.get("article_id") or "").lower(),
+            str(md.get("appendix_id") or "").lower(),
+        }
+        ids.discard("")
+        return 0.35 if (refset and ids.intersection(refset)) else 0.0
+
+    # Re-rank merged context so reference chunks don't displace key semantic hits.
+    final_ranked = sorted(
+        merged.values(),
+        key=lambda c: float(c.get("score", 0.0) or 0.0) + _ref_boost(c) + (0.05 if c.get("source") == "semantic" else 0.0),
+        reverse=True,
+    )
     return {
         "extracted_references": refs,
         "referenced_chunks": referenced_chunks,
-        "final_context_chunks": list(merged.values()),
+        "final_context_chunks": final_ranked,
     }
 
 
@@ -198,7 +283,12 @@ def answer_check_node(state: AdvancedRagState, *, client: OpenAI, model: str) ->
     updates: Dict[str, Any] = {"answer_supported": supported, "support_notes": notes}
     if not supported and state.get("retry_count", 0) < 1:
         base = state.get("rewritten_query", state["resolved_query"])
-        updates["rewritten_query"] = f"{base}. Also resolve: {hint}" if hint else base
+        if hint:
+            updates["rewritten_query"] = f"{base}. Also resolve: {hint}"
+            # Ensure the planner sees the hint on retry.
+            updates["resolved_query"] = f"{state.get('resolved_query', state['user_query'])}. Also resolve: {hint}"
+        else:
+            updates["rewritten_query"] = base
         updates["retry_count"] = state.get("retry_count", 0) + 1
-        updates["top_k"] = max(int(state.get("top_k", 8)), 12)
+        updates["top_k"] = max(int(state.get("top_k", 5)), 10)
     return updates
