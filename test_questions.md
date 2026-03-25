@@ -17,7 +17,7 @@ These check whether the system can find the right clause directly.
 
 ## More specific clause-level questions
 
-These are better for testing whether your chunking is precise enough.
+These are better for testing whether the chunking is precise enough.
 
 * Are marketing activities included in Relevant Costs?
 * Are finance costs excluded from Relevant Costs?

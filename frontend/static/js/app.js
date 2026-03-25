@@ -12,41 +12,6 @@ const tplUser = document.getElementById("tpl-user-bubble");
 const tplAssistant = document.getElementById("tpl-assistant-bubble");
 
 const SESSION_KEY = "f1_regs_session_id";
-const SYNTH_KEY = "f1_regs_synthesizer";
-
-const synthOpenaiBtn = document.getElementById("synth-openai");
-const synthQwenBtn = document.getElementById("synth-qwen");
-
-function getSelectedSynthesizer() {
-  const v = sessionStorage.getItem(SYNTH_KEY);
-  return v === "local_qwen" ? "local_qwen" : "openai";
-}
-
-function setSelectedSynthesizer(mode) {
-  const m = mode === "local_qwen" ? "local_qwen" : "openai";
-  sessionStorage.setItem(SYNTH_KEY, m);
-  syncSynthUi(m);
-}
-
-function syncSynthUi(mode) {
-  const isQwen = mode === "local_qwen";
-  if (synthOpenaiBtn) {
-    synthOpenaiBtn.classList.toggle("synth-switch__opt--active", !isQwen);
-    synthOpenaiBtn.setAttribute("aria-checked", String(!isQwen));
-  }
-  if (synthQwenBtn) {
-    synthQwenBtn.classList.toggle("synth-switch__opt--active", isQwen);
-    synthQwenBtn.setAttribute("aria-checked", String(isQwen));
-  }
-}
-
-function initSynthSwitch() {
-  syncSynthUi(getSelectedSynthesizer());
-  synthOpenaiBtn?.addEventListener("click", () => setSelectedSynthesizer("openai"));
-  synthQwenBtn?.addEventListener("click", () => setSelectedSynthesizer("local_qwen"));
-}
-
-initSynthSwitch();
 
 function getSessionId() {
   let id = sessionStorage.getItem(SESSION_KEY);
@@ -95,8 +60,6 @@ function appendAssistantShell() {
 function setComposerEnabled(on) {
   sendBtn.disabled = !on;
   inputEl.disabled = !on;
-  synthOpenaiBtn && (synthOpenaiBtn.disabled = !on);
-  synthQwenBtn && (synthQwenBtn.disabled = !on);
 }
 
 function autoResizeTextarea() {
@@ -169,7 +132,6 @@ formEl.addEventListener("submit", async (e) => {
       body: JSON.stringify({
         message: text,
         session_id: getSessionId(),
-        synthesizer: getSelectedSynthesizer(),
       }),
     });
 
@@ -209,15 +171,6 @@ formEl.addEventListener("submit", async (e) => {
     if (metaPayload) {
       meta.hidden = false;
       const rows = [];
-      if (metaPayload.synthesizer) {
-        const label =
-          metaPayload.synthesizer === "local_qwen"
-            ? "Qwen (local LoRA)"
-            : "GPT-4o (gpt-4o-mini)";
-        rows.push(
-          `<div class="msg__meta-row"><strong>Answer model</strong> ${escapeHtml(label)}</div>`
-        );
-      }
       if (metaPayload.resolved_query) {
         rows.push(
           `<div class="msg__meta-row"><strong>Resolved query</strong> ${escapeHtml(metaPayload.resolved_query)}</div>`

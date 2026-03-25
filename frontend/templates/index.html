@@ -32,39 +32,6 @@
     </main>
 
     <div class="composer-wrap">
-      <div class="composer-tools">
-        <div class="synth-field" id="synth-field">
-          <span class="synth-field__label" id="synth-field-label">Answer synthesis</span>
-          <div
-            class="synth-switch"
-            role="radiogroup"
-            aria-labelledby="synth-field-label"
-          >
-            <button
-              type="button"
-              class="synth-switch__opt synth-switch__opt--active"
-              id="synth-openai"
-              data-synthesizer="openai"
-              role="radio"
-              aria-checked="true"
-            >
-              <span class="synth-switch__title">GPT-4o</span>
-              <span class="synth-switch__sub">Cloud · gpt-4o-mini</span>
-            </button>
-            <button
-              type="button"
-              class="synth-switch__opt"
-              id="synth-qwen"
-              data-synthesizer="local_qwen"
-              role="radio"
-              aria-checked="false"
-            >
-              <span class="synth-switch__title">Qwen</span>
-              <span class="synth-switch__sub">Local · fine-tuned LoRA</span>
-            </button>
-          </div>
-        </div>
-      </div>
       <form class="composer" id="composer-form" autocomplete="off">
         <label class="sr-only" for="user-input">Your question</label>
         <textarea

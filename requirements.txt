@@ -25,7 +25,7 @@ ipykernel>=6.29.11
 
 # PaddleOCR-VL doc parser (https://huggingface.co/PaddlePaddle/PaddleOCR-VL)
 # GPU default (CUDA 12.6 example from model card):
-paddlepaddle-gpu==3.2.1    # install from https://www.paddlepaddle.org.cn/packages/stable/cu126/
-paddleocr[doc-parser]>=3.4.0
+#paddlepaddle-gpu==3.2.1    # install from https://www.paddlepaddle.org.cn/packages/stable/cu126/
+#paddleocr[doc-parser]>=3.4.0
 # If you want CPU-only instead, uninstall paddlepaddle-gpu and install:
 #   pip install paddlepaddle>=3.2.0

@@ -8,19 +8,12 @@ Run from repository root (with .env and venv):
 Or:
     flask --app frontend.app run --host 0.0.0.0 --port 5000
 
-Optional env (default synthesizer if UI omits it; per-request override in JSON body):
-    ADVANCED_RAG_SYNTHESIZER=openai|local_qwen|local_qwen_base
-    ADVANCED_RAG_QWEN_ADAPTER_PATH=/path/to/Qwen2.5-1.5B-lora  # or .../checkpoint-370
-    ADVANCED_RAG_QWEN_BASE_ONLY=1
-    ADVANCED_RAG_QWEN_BASE_MODEL=Qwen/Qwen2.5-1.5B-Instruct
-
-JSON body may include ``synthesizer``: ``"openai"`` | ``"local_qwen"`` | ``"local_qwen_base"`` (answer step only).
+Answer synthesis uses the OpenAI API (see ``AdvancedRegulationAssistant`` and ``.env``).
 """
 
 from __future__ import annotations
 
 import json
-import os
 import queue
 import threading
 from pathlib import Path
@@ -31,43 +24,22 @@ from flask import Flask, Response, render_template, request
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = Path(__file__).resolve().parent
 
-# One assistant per synthesizer backend (lazy init; first request pays load cost for that backend)
-_assistants: Dict[str, Any] = {}
+_assistant: Any | None = None
 
 
-def _normalize_synthesizer(raw: str | None) -> str:
-    v = (raw or "").strip().lower()
-    if v in ("qwen_base", "local_qwen_base", "base_qwen"):
-        return "local_qwen_base"
-    if v in ("qwen", "local_qwen", "local", "lora"):
-        return "local_qwen"
-    return "openai"
-
-
-def _get_assistant(synthesizer: str | None) -> Any:
-    """Return cached AdvancedRegulationAssistant for openai vs local_qwen answer synthesizer."""
+def _get_assistant() -> Any:
+    """Cached AdvancedRegulationAssistant (OpenAI answer synthesizer)."""
     import sys
 
+    global _assistant
+    if _assistant is not None:
+        return _assistant
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     from src.advanced_rag import AdvancedRegulationAssistant
 
-    key = _normalize_synthesizer(synthesizer)
-    if key not in _assistants:
-        kw: dict = {}
-        if key == "local_qwen":
-            kw["answer_synthesizer_backend"] = "local_qwen"
-            ap = os.environ.get("ADVANCED_RAG_QWEN_ADAPTER_PATH")
-            if ap:
-                kw["qwen_adapter_path"] = ap
-        elif key == "local_qwen_base":
-            kw["answer_synthesizer_backend"] = "local_qwen"
-            kw["qwen_use_base_only"] = True
-            bm = os.environ.get("ADVANCED_RAG_QWEN_BASE_MODEL")
-            if bm:
-                kw["qwen_base_model"] = bm
-        _assistants[key] = AdvancedRegulationAssistant(**kw)
-    return _assistants[key]
+    _assistant = AdvancedRegulationAssistant()
+    return _assistant
 
 
 def create_app() -> Flask:
@@ -87,11 +59,10 @@ def create_app() -> Flask:
         data = request.get_json(force=True, silent=True) or {}
         message = (data.get("message") or "").strip()
         session_id = (data.get("session_id") or "default").strip() or "default"
-        synth_raw = data.get("synthesizer") or os.environ.get("ADVANCED_RAG_SYNTHESIZER", "openai")
         if not message:
             return {"error": "message required"}, 400
         try:
-            r = _get_assistant(synth_raw).ask(message, session_id=session_id)
+            r = _get_assistant().ask(message, session_id=session_id)
         except Exception as e:  # pragma: no cover
             return {"error": str(e)}, 500
 
@@ -119,7 +90,6 @@ def create_app() -> Flask:
                 "answer_supported": r.answer_supported,
                 "support_notes": r.support_notes,
                 "citations": citations,
-                "synthesizer": _normalize_synthesizer(synth_raw),
             },
             200,
         )
@@ -135,8 +105,6 @@ def create_app() -> Flask:
         data = request.get_json(force=True, silent=True) or {}
         message = (data.get("message") or "").strip()
         session_id = (data.get("session_id") or "default").strip() or "default"
-        synth_raw = data.get("synthesizer") or os.environ.get("ADVANCED_RAG_SYNTHESIZER", "openai")
-        synth_key = _normalize_synthesizer(synth_raw)
         if not message:
             return Response(
                 json.dumps({"error": "message required"}),
@@ -156,7 +124,7 @@ def create_app() -> Flask:
 
         def generate() -> Generator[str, None, None]:
             result_q: queue.Queue = queue.Queue()
-            assistant = _get_assistant(synth_raw)
+            assistant = _get_assistant()
 
             def worker() -> None:
                 try:
@@ -215,7 +183,6 @@ def create_app() -> Flask:
                 "answer_supported": r.answer_supported,
                 "support_notes": r.support_notes or "",
                 "citations": citations,
-                "synthesizer": synth_key,
             }
             yield f"data: {json.dumps(meta)}\n\n"
             yield "data: [DONE]\n\n"

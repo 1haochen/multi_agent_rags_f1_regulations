@@ -220,6 +220,16 @@ def _join_span_parts(parts: List[str]) -> str:
     PDF spans usually carry their own trailing spaces; after dropping struck spans,
     neighbors may need an explicit space (e.g. 'manufacture' + 'assembly ').
     """
+    def last_alnum_run(s: str) -> str:
+        s = s.rstrip()
+        m = re.search(r"([A-Za-z0-9]+)$", s)
+        return m.group(1) if m else ""
+
+    def first_alnum_run(s: str) -> str:
+        s = s.lstrip()
+        m = re.match(r"^([A-Za-z0-9]+)", s)
+        return m.group(1) if m else ""
+
     if not parts:
         return ""
     out = parts[0]
@@ -229,12 +239,45 @@ def _join_span_parts(parts: List[str]) -> str:
         if not out:
             out = n
             continue
-        if out[-1].isspace() or n[0].isspace():
-            out += n
-        elif n[0] in ",.;:!?)]}%":
+        # Clause/heading IDs are often split across spans, e.g. "B1." + "4.1".
+        # Never inject a word space after a dot if the next span begins with a digit.
+        if out.rstrip().endswith(".") and n.lstrip()[:1].isdigit():
+            out = out.rstrip()
+            out += n.lstrip()
+            continue
+        if n[0] in ",.;:!?)]}%":
+            # Never keep a space before punctuation, even if the prior span
+            # ended with whitespace.
+            out = out.rstrip()
+            out += n.lstrip()
+        elif out[-1].isspace() or n[0].isspace():
             out += n
         elif out[-1] in "([{-":
             out += n
+        elif out[-1] == "-" and (n[0].isalnum() or n[0] in "([{"):
+            # Hyphenated line breaks or hyphen-joins should not introduce spaces.
+            out += n
+        elif out[-1].isalnum() and n[0].isalnum():
+            # Heuristic: style runs (e.g. pink revision text) can split a word
+            # into separate spans, sometimes leaving single-letter spans like
+            # "m" + "eetings" or "S" + "print". Avoid injecting a space in those cases.
+            prev_run = last_alnum_run(out)
+            next_run = first_alnum_run(n)
+            if (
+                len(prev_run) == 1
+                and prev_run.isalpha()
+                and next_run
+                and next_run.isalpha()
+            ) or (
+                1 <= len(prev_run) <= 2
+                and prev_run.isalpha()
+                and next_run
+                and next_run.isalpha()
+                and next_run[0].islower()
+            ):
+                out += n
+            else:
+                out += " " + n
         else:
             out += " " + n
     out = out.rstrip()

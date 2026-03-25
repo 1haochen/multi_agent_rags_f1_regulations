@@ -351,7 +351,7 @@ body {
   50% { left: 32px; }
 }
 
-/* Composer + answer-model switch */
+/* Composer */
 .composer-wrap {
   flex-shrink: 0;
   position: fixed;
@@ -367,104 +367,6 @@ body {
 
 .composer-wrap > * {
   pointer-events: auto;
-}
-
-.composer-tools {
-  margin-bottom: 10px;
-}
-
-.synth-field {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
-  padding: 10px 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.2);
-}
-
-.synth-field__label {
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  width: 100%;
-}
-
-@media (min-width: 520px) {
-  .synth-field__label {
-    width: auto;
-    margin-right: 4px;
-  }
-}
-
-.synth-switch {
-  display: flex;
-  flex: 1;
-  min-width: min(100%, 280px);
-  padding: 3px;
-  gap: 3px;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-}
-
-.synth-switch__opt {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 10px;
-  border: none;
-  border-radius: calc(var(--radius-sm) - 2px);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-family: inherit;
-  text-align: center;
-  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.synth-switch__opt:hover:not(:disabled) {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.synth-switch__opt:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.synth-switch__opt--active {
-  background: var(--assistant-bubble);
-  color: var(--text);
-  box-shadow: 0 0 0 1px var(--border), 0 2px 12px rgba(225, 6, 0, 0.12);
-}
-
-.synth-switch__opt--active .synth-switch__title {
-  color: var(--text);
-}
-
-.synth-switch__opt--active .synth-switch__sub {
-  color: var(--text-muted);
-}
-
-.synth-switch__title {
-  display: block;
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.25;
-}
-
-.synth-switch__sub {
-  display: block;
-  font-size: 0.65rem;
-  font-weight: 500;
-  color: var(--text-muted);
-  margin-top: 2px;
-  line-height: 1.2;
 }
 
 .composer {

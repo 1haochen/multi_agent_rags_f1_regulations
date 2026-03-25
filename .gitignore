@@ -7,6 +7,7 @@ src/ocr/__pycache__/
 src/regulations_chunking/__pycache__/
 src/rag/__pycache__/
 src/regulations_chunking/__pycache__/
+src/advanced_rag/__pycache__/
 
 # example chunked folder
 example_chunked/
