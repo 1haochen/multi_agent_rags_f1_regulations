@@ -15,14 +15,8 @@ example_chunked/
 # demo_chunking.py output
 demo_chunking.py_output/
 
-# notebooks folder
-notebooks/
-
-# notebooks folder
-notebooks/
-
-# notebooks folder
-notebooks/
+# tmp files
+tmp_check.py
 
 # chunks: ignore contents like data/; track folder via .gitkeep
 chunks/*

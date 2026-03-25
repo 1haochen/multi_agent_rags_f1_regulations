@@ -17,6 +17,7 @@ Typical usage from a notebook or script:
 """
 
 import re
+from html.parser import HTMLParser
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .model import Block, Chunk, ChunkingConfig, Page
@@ -32,6 +33,231 @@ APPENDIX_REF_RE = re.compile(r"\bAPPENDIX\s+([A-Z]\d+)\b", re.IGNORECASE)
 TOP_CLAUSE_HEADING_RE = re.compile(r"^(?P<id>[A-Z]\d+\.\d+)(?!\.)\b")
 SUBCLAUSE_LINE_RE = re.compile(r"^(?P<id>[A-Z]\d+\.\d+\.\d+(?:\.\d+)*)\b", re.IGNORECASE)
 LETTERED_ITEM_LINE_RE = re.compile(r"^(?P<id>[a-z])\.\s", re.IGNORECASE)
+ROMAN_ITEM_LINE_RE = re.compile(r"^(?P<id>i|ii|iii|iv|v|vi|vii|viii|ix|x)\.\s", re.IGNORECASE)
+CAP_ITEM_LINE_RE = re.compile(r"^(?P<id>[A-Z])\.\s")
+FOOTNOTE_LINE_RE = re.compile(r"^\((?P<n>\d+)\)\s*(?P<text>.+?)\s*$")
+
+
+class _TableHTMLParser(HTMLParser):
+    """
+    Tiny HTML table parser that extracts rows/cells with rowspan/colspan + text.
+    Designed for PaddleOCR-VL table HTML.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.in_tr = False
+        self.in_cell = False
+        self.cell_tag: str | None = None
+        self.cell_attrs: dict[str, str] = {}
+        self.cell_text_parts: list[str] = []
+        self.current_row: list[dict[str, Any]] = []
+        self.rows: list[list[dict[str, Any]]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        t = tag.lower()
+        if t == "tr":
+            self.in_tr = True
+            self.current_row = []
+            return
+        if t in {"td", "th"} and self.in_tr:
+            self.in_cell = True
+            self.cell_tag = t
+            self.cell_attrs = {k.lower(): (v or "") for k, v in attrs}
+            self.cell_text_parts = []
+            return
+
+    def handle_data(self, data: str) -> None:
+        if self.in_cell and data:
+            self.cell_text_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        t = tag.lower()
+        if t in {"td", "th"} and self.in_cell:
+            text = " ".join(" ".join(self.cell_text_parts).split()).strip()
+            try:
+                rowspan = int(self.cell_attrs.get("rowspan") or "1")
+            except ValueError:
+                rowspan = 1
+            try:
+                colspan = int(self.cell_attrs.get("colspan") or "1")
+            except ValueError:
+                colspan = 1
+            self.current_row.append(
+                {
+                    "tag": self.cell_tag or "td",
+                    "text": text,
+                    "rowspan": max(1, rowspan),
+                    "colspan": max(1, colspan),
+                }
+            )
+            self.in_cell = False
+            self.cell_tag = None
+            self.cell_attrs = {}
+            self.cell_text_parts = []
+            return
+        if t == "tr" and self.in_tr:
+            self.rows.append(self.current_row)
+            self.current_row = []
+            self.in_tr = False
+
+
+def _split_table_blocks(raw: str) -> list[str]:
+    """
+    OCR sometimes concatenates multiple tables with repeated 'TABLE:' markers.
+    Split into individual <table>...</table> strings.
+    """
+    if not raw:
+        return []
+    tables = re.findall(r"(<table[\s\S]*?</table>)", raw, flags=re.IGNORECASE)
+    if tables:
+        return [t.strip() for t in tables if t.strip()]
+    # Fallback: some exports may not have explicit <table> wrapper.
+    return [raw.strip()]
+
+
+def _expand_cells_to_grid(rows: list[list[dict[str, Any]]]) -> list[list[str]]:
+    """
+    Expand rowspan/colspan into a rectangular grid of strings.
+    """
+    grid: list[list[str]] = []
+    # Track pending rowspans: col_idx -> (remaining_rows, text)
+    spans: dict[int, tuple[int, str]] = {}
+    for r in rows:
+        out_row: list[str] = []
+        col = 0
+        # fill from existing spans
+        while col in spans:
+            remaining, txt = spans[col]
+            out_row.append(txt)
+            remaining -= 1
+            if remaining <= 0:
+                spans.pop(col, None)
+            else:
+                spans[col] = (remaining, txt)
+            col += 1
+
+        for cell in r:
+            # advance to next free col (skipping active spans)
+            while col in spans:
+                remaining, txt = spans[col]
+                out_row.append(txt)
+                remaining -= 1
+                if remaining <= 0:
+                    spans.pop(col, None)
+                else:
+                    spans[col] = (remaining, txt)
+                col += 1
+
+            txt = str(cell.get("text") or "").strip()
+            rowspan = int(cell.get("rowspan") or 1)
+            colspan = int(cell.get("colspan") or 1)
+            # fill current row
+            for _ in range(max(1, colspan)):
+                out_row.append(txt)
+                if rowspan > 1:
+                    spans[col] = (rowspan - 1, txt)
+                col += 1
+
+        # after processing cells, also fill trailing spans for this row if any contiguous
+        while col in spans:
+            remaining, txt = spans[col]
+            out_row.append(txt)
+            remaining -= 1
+            if remaining <= 0:
+                spans.pop(col, None)
+            else:
+                spans[col] = (remaining, txt)
+            col += 1
+
+        grid.append(out_row)
+    # Normalize row lengths
+    width = max((len(r) for r in grid), default=0)
+    for r in grid:
+        if len(r) < width:
+            r.extend([""] * (width - len(r)))
+    return grid
+
+
+def _looks_like_item_number(s: str) -> bool:
+    s = (s or "").strip()
+    if not s:
+        return False
+    # Typical Item No column: 1-3 digits.
+    return bool(re.fullmatch(r"\d{1,3}", s))
+
+
+def _split_header_and_body(grid: list[list[str]]) -> tuple[list[list[str]], list[list[str]]]:
+    """
+    Heuristic: header rows are the top rows until we hit a row containing an item number.
+    """
+    header: list[list[str]] = []
+    body: list[list[str]] = []
+    in_header = True
+    for row in grid:
+        if in_header:
+            if any(_looks_like_item_number(c) for c in row):
+                in_header = False
+                body.append(row)
+            else:
+                header.append(row)
+        else:
+            body.append(row)
+    # Ensure we keep at least 1 header row if available.
+    if not header and grid:
+        header = [grid[0]]
+        body = grid[1:]
+    return header, body
+
+
+def _derive_column_names(header_grid: list[list[str]]) -> list[str]:
+    if not header_grid:
+        return []
+    cols = len(header_grid[0])
+    names: list[str] = []
+    for j in range(cols):
+        parts: list[str] = []
+        last = ""
+        for i in range(len(header_grid)):
+            raw = (header_grid[i][j] or "").strip()
+            if not raw:
+                continue
+            if raw == last:
+                continue
+            parts.append(raw)
+            last = raw
+        name = " / ".join(parts).strip() or f"col_{j+1}"
+        name = re.sub(r"\s+", " ", name)
+        names.append(name)
+    return names
+
+
+def _parse_footnotes(text: str) -> dict[str, str] | None:
+    """
+    Parse footnote/legend blocks like:
+      (1) No downward adjustment.
+      (2) Downward adjustment equals ...
+    """
+    if not text:
+        return None
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    out: dict[str, str] = {}
+    for ln in lines:
+        m = FOOTNOTE_LINE_RE.match(ln)
+        if not m:
+            return None
+        out[m.group("n")] = m.group("text").strip()
+    return out or None
+
+
+def _format_footnotes_inline(footnotes: dict[str, str], *, max_chars: int = 700) -> str:
+    parts = [f"({k}) {v}" for k, v in sorted(footnotes.items(), key=lambda kv: int(kv[0]))]
+    s = "; ".join(parts)
+    if len(s) > max_chars:
+        s = s[: max_chars - 1].rstrip() + "…"
+    return s
 
 
 def build_chunks(pages: Iterable[Page], cfg: ChunkingConfig) -> List[Chunk]:
@@ -204,7 +430,7 @@ def _article_retrieval_chunks(
         text = _join_block_text(text_blocks)
         if text and not _is_front_matter_span(base_text=text, clause_ids=[parent_clause_id]):
             # Long clause units get finer-grained splits by subclauses / items.
-            text_pieces = _split_clause_text(text, parent_clause_id)
+            text_pieces = _split_clause_text(text, parent_clause_id, cfg=cfg)
             for piece_idx, piece in enumerate(text_pieces):
                 piece_clause_ids = _extract_clause_ids(piece)
                 piece_scope = "clause" if len(text_pieces) == 1 else "subclause"
@@ -302,48 +528,202 @@ def _appendix_chunks(
     Keep appendix as a separate scope. We still split by paragraph-aware
     packing to keep chunks manageable for retrieval.
     """
+    out: List[Chunk] = []
     paragraph_units: List[str] = []
-    table_units: List[str] = []
+
+    # When we emit a table chunk, we keep its indices so footnotes that appear
+    # immediately after can be attached.
+    last_table_indices: List[int] = []
+    last_table_id: str | None = None
+    pending_footnotes: dict[str, str] | None = None
+
+    def flush_paragraphs() -> None:
+        nonlocal paragraph_units
+        if not paragraph_units:
+            return
+        pieces = _pack_units_by_word_budget(paragraph_units, min_words=250, max_words=700)
+        for piece in pieces:
+            out.append(
+                Chunk(
+                    text=piece,
+                    metadata={
+                        "scope": "appendix",
+                        "chunk_scope": "appendix",
+                        "article_id": None,
+                        "article_title": None,
+                        "appendix_id": appendix_id,
+                        "appendix_title": appendix_title,
+                        "span_index": span_index,
+                        "chunk_index_within_span": len(out),
+                        "chunk_order_within_article": len(out),
+                        "parent_clause_id": None,
+                        "chunk_title": appendix_title,
+                        "page_indices": _sorted_unique([b.page_index for b in blocks]),
+                        "block_ids": _sorted_unique([b.block_id for b in blocks]),
+                        "clause_ids": _extract_clause_ids(piece),
+                        "has_table": False,
+                        "appendix_refs": _extract_appendix_refs(piece),
+                    },
+                )
+            )
+        paragraph_units = []
+
+    def attach_footnotes_to_last_table() -> None:
+        nonlocal pending_footnotes, last_table_indices
+        if not pending_footnotes or not last_table_indices:
+            return
+        inline = _format_footnotes_inline(pending_footnotes)
+        # Put short legend inline in each table chunk.
+        for idx in last_table_indices:
+            out[idx].text = f"{out[idx].text}\n\nFOOTNOTES: {inline}"
+            out[idx].metadata["table_footnotes"] = pending_footnotes
+        pending_footnotes = None
+
+    def emit_table_chunks(table_html: str, *, table_id: str, table_block: Block) -> None:
+        nonlocal last_table_indices, last_table_id
+        # Parse table
+        parser = _TableHTMLParser()
+        parser.feed(table_html)
+        rows = parser.rows
+        if not rows:
+            # Fallback: keep raw HTML (still ensure it's not merged with other tables).
+            txt = f"TABLE:\n{table_html}".strip()
+            out.append(
+                Chunk(
+                    text=txt[: cfg.max_chars] if len(txt) > cfg.max_chars else txt,
+                    metadata={
+                        "scope": "appendix",
+                        "chunk_scope": "table",
+                        "article_id": None,
+                        "article_title": None,
+                        "appendix_id": appendix_id,
+                        "appendix_title": appendix_title,
+                        "span_index": span_index,
+                        "chunk_index_within_span": len(out),
+                        "chunk_order_within_article": len(out),
+                        "parent_clause_id": None,
+                        "chunk_title": appendix_title,
+                        "page_indices": [table_block.page_index],
+                        "block_ids": [table_block.block_id],
+                        "clause_ids": [],
+                        "has_table": True,
+                        "appendix_refs": [],
+                        "table_id": table_id,
+                        "table_format": "html_raw",
+                    },
+                )
+            )
+            last_table_indices = [len(out) - 1]
+            last_table_id = table_id
+            return
+
+        grid = _expand_cells_to_grid(rows)
+        header_grid, body_grid = _split_header_and_body(grid)
+        col_names = _derive_column_names(header_grid)
+
+        def row_to_line(row: List[str]) -> str:
+            pairs = []
+            for j, v in enumerate(row):
+                key = col_names[j] if j < len(col_names) else f"col_{j+1}"
+                val = (v or "").strip()
+                if not val:
+                    continue
+                pairs.append(f"{key}={val}")
+            return " | ".join(pairs)
+
+        row_lines = [row_to_line(r) for r in body_grid if any((c or "").strip() for c in r)]
+        # If we couldn't derive anything useful, fallback to a compact grid dump.
+        if not row_lines:
+            row_lines = [" | ".join((c or "").strip() for c in r) for r in body_grid]
+
+        header_summary = "COLUMNS: " + ", ".join(col_names[:20]) + ("…" if len(col_names) > 20 else "")
+        prefix = f"TABLE (appendix={appendix_id} table_id={table_id})\n{header_summary}\n"
+
+        # Split into row groups under cfg.max_chars
+        start = 0
+        emitted: List[int] = []
+        while start < len(row_lines):
+            buf = [prefix]
+            used = len(prefix)
+            end = start
+            while end < len(row_lines):
+                line = row_lines[end]
+                extra = len(line) + 1
+                if end > start and used + extra > cfg.max_chars:
+                    break
+                buf.append(line)
+                used += extra
+                end += 1
+                if end - start >= 40 and used > int(cfg.max_chars * 0.75):
+                    break
+
+            chunk_text = "\n".join(buf).strip()
+            out.append(
+                Chunk(
+                    text=chunk_text,
+                    metadata={
+                        "scope": "appendix",
+                        "chunk_scope": "table",
+                        "article_id": None,
+                        "article_title": None,
+                        "appendix_id": appendix_id,
+                        "appendix_title": appendix_title,
+                        "span_index": span_index,
+                        "chunk_index_within_span": len(out),
+                        "chunk_order_within_article": len(out),
+                        "parent_clause_id": None,
+                        "chunk_title": appendix_title,
+                        "page_indices": [table_block.page_index],
+                        "block_ids": [table_block.block_id],
+                        "clause_ids": [],
+                        "has_table": True,
+                        "appendix_refs": [],
+                        "table_id": table_id,
+                        "table_row_start": start,
+                        "table_row_end": end - 1,
+                        "table_columns": col_names,
+                        "table_format": "normalized_rows",
+                    },
+                )
+            )
+            emitted.append(len(out) - 1)
+            start = end
+
+        last_table_indices = emitted
+        last_table_id = table_id
+
     for b in blocks:
         if b.label == "table":
+            # Any pending footnotes should be attached before starting a new table.
+            attach_footnotes_to_last_table()
+            flush_paragraphs()
+
             table_text = (b.original_content or b.content or "").strip()
-            if table_text:
-                table_units.append(f"TABLE:\n{table_text}")
+            if not table_text:
+                continue
+
+            # Split concatenated multiple tables into individual parses.
+            for ti, one_table in enumerate(_split_table_blocks(table_text)):
+                table_id = f"{appendix_id}:{span_index}:{b.block_id}:{ti}"
+                emit_table_chunks(one_table, table_id=table_id, table_block=b)
             continue
+
         cleaned = _clean_block_text(b.content)
-        if cleaned:
-            paragraph_units.append(cleaned)
+        if not cleaned:
+            continue
 
-    all_units = paragraph_units + table_units
-    if not all_units:
-        return []
+        # If this looks like table footnotes, attach to last emitted table.
+        fn = _parse_footnotes(cleaned)
+        if fn and last_table_id and last_table_indices:
+            pending_footnotes = {**(pending_footnotes or {}), **fn}
+            continue
 
-    pieces = _pack_units_by_word_budget(all_units, min_words=250, max_words=700)
-    out: List[Chunk] = []
-    for idx, piece in enumerate(pieces):
-        out.append(
-            Chunk(
-                text=piece,
-                metadata={
-                    "scope": "appendix",
-                    "chunk_scope": "appendix",
-                    "article_id": None,
-                    "article_title": None,
-                    "appendix_id": appendix_id,
-                    "appendix_title": appendix_title,
-                    "span_index": span_index,
-                    "chunk_index_within_span": idx,
-                    "chunk_order_within_article": idx,
-                    "parent_clause_id": None,
-                    "chunk_title": appendix_title,
-                    "page_indices": _sorted_unique([b.page_index for b in blocks]),
-                    "block_ids": _sorted_unique([b.block_id for b in blocks]),
-                    "clause_ids": _extract_clause_ids(piece),
-                    "has_table": "TABLE:" in piece,
-                    "appendix_refs": _extract_appendix_refs(piece),
-                },
-            )
-        )
+        # Otherwise it's normal appendix prose.
+        attach_footnotes_to_last_table()
+        paragraph_units.append(cleaned)
+
+    attach_footnotes_to_last_table()
+    flush_paragraphs()
     return out
 
 
@@ -480,7 +860,7 @@ def _build_clause_units(blocks: List[Block], article_id: str) -> List[Dict[str, 
     return units
 
 
-def _split_clause_text(text: str, parent_clause_id: str) -> List[str]:
+def _split_clause_text(text: str, parent_clause_id: str, *, cfg: ChunkingConfig) -> List[str]:
     """
     Split a clause text into retrieval chunks while preserving coherence.
 
@@ -488,27 +868,63 @@ def _split_clause_text(text: str, parent_clause_id: str) -> List[str]:
     - If long, split by subclause headings under the same parent clause.
     - If still long, split by lettered item lines.
     - Final fallback: paragraph budget split.
+    - Hard cap: if any piece remains over cfg.max_chars, split by character budget.
     """
-    if _word_count(text) <= 700:
+    # Character-based short-circuit first (robust to OCR issues that break word counting).
+    if len(text) <= cfg.max_chars:
         return [text.strip()]
+    if _word_count(text) <= 700:
+        # Still allow oversized fallback below.
+        base = [text.strip()]
+    else:
+        base = []
 
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
 
     subclause_segments = _split_by_subclause_headings(paragraphs, parent_clause_id)
     subclause_segments = _merge_heading_only_segments(subclause_segments, parent_clause_id)
     if len(subclause_segments) > 1:
-        packed = _pack_units_by_word_budget(subclause_segments, min_words=250, max_words=700)
-        if packed:
-            return packed
+        # IMPORTANT: treat third-level (and below) subclauses as hard boundaries.
+        # Do not pack/merge across subclause boundaries, otherwise we can mix
+        # e.g. E3.1.2 content into E3.1.1's ordered list.
+        base = []
+        for seg in subclause_segments:
+            seg = seg.strip()
+            if not seg:
+                continue
+            # Within each subclause, optionally split by top-level a/b/c items.
+            seg_paragraphs = [p.strip() for p in re.split(r"\n\s*\n", seg) if p.strip()]
+            letter_segments = _split_by_lettered_items(seg_paragraphs)
+            letter_segments = _merge_heading_only_segments(letter_segments, parent_clause_id)
+            if len(letter_segments) > 1:
+                base.extend(_pack_units_by_word_budget(letter_segments, min_words=250, max_words=700))
+            else:
+                base.append(seg)
 
-    letter_segments = _split_by_lettered_items(paragraphs)
-    letter_segments = _merge_heading_only_segments(letter_segments, parent_clause_id)
-    if len(letter_segments) > 1:
-        packed = _pack_units_by_word_budget(letter_segments, min_words=250, max_words=700)
-        if packed:
-            return packed
+    # If we did not split by subclause headings, we may still want to split by
+    # top-level a/b/c items (with hierarchy-aware handling inside).
+    if not base:
+        letter_segments = _split_by_lettered_items(paragraphs)
+        letter_segments = _merge_heading_only_segments(letter_segments, parent_clause_id)
+        if len(letter_segments) > 1:
+            packed = _pack_units_by_word_budget(letter_segments, min_words=250, max_words=700)
+            if packed:
+                base = packed
 
-    return _pack_units_by_word_budget(paragraphs, min_words=250, max_words=700)
+    if not base:
+        base = _pack_units_by_word_budget(paragraphs, min_words=250, max_words=700)
+
+    # Hard cap: ensure we never emit massive single chunks (e.g. OCR merged multi-pages).
+    capped: List[str] = []
+    for piece in base:
+        piece = piece.strip()
+        if not piece:
+            continue
+        if len(piece) <= cfg.max_chars:
+            capped.append(piece)
+        else:
+            capped.extend(_split_oversized_unit(piece, cfg.max_chars))
+    return capped
 
 
 def _split_by_subclause_headings(paragraphs: List[str], parent_clause_id: str) -> List[str]:
@@ -516,7 +932,7 @@ def _split_by_subclause_headings(paragraphs: List[str], parent_clause_id: str) -
     current: List[str] = []
     wanted_prefix = f"{parent_clause_id}."
     for p in paragraphs:
-        first_line = p.splitlines()[0].strip()
+        first_line = _normalize_clause_spacing(p.splitlines()[0].strip())
         m = SUBCLAUSE_LINE_RE.match(first_line)
         if m and m.group("id").upper().startswith(wanted_prefix.upper()):
             if current:
@@ -531,20 +947,62 @@ def _split_by_subclause_headings(paragraphs: List[str], parent_clause_id: str) -
 
 def _split_by_lettered_items(paragraphs: List[str]) -> List[str]:
     """
-    Split at lettered list items (a., b., c., ...) when present.
+    Split at top-level lettered list items (a., b., c., ...) when present.
+
+    Do NOT split on nested list markers that often appear inside an (a)/(b)/(c)
+    item, such as:
+      - roman numerals: i., ii., iii., ...
+      - capital letters: A., B., C., ...
+
+    Heuristic: only enter "lower-alpha list mode" when we see an `a.` item.
+    While in that mode, we split only on the expected next letter (a→b→c...).
     """
     segments: List[str] = []
     current: List[str] = []
+    in_lower_alpha = False
+    expected_ord: int | None = None
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            segments.append("\n\n".join(current))
+            current = []
+
     for p in paragraphs:
         first_line = p.splitlines()[0].strip()
-        if LETTERED_ITEM_LINE_RE.match(first_line):
-            if current:
-                segments.append("\n\n".join(current))
-            current = [p]
-        else:
+        # Never split on roman numerals or capital-letter nested items.
+        if ROMAN_ITEM_LINE_RE.match(first_line) or CAP_ITEM_LINE_RE.match(first_line):
             current.append(p)
-    if current:
-        segments.append("\n\n".join(current))
+            continue
+
+        m = LETTERED_ITEM_LINE_RE.match(first_line)
+        if not m:
+            current.append(p)
+            continue
+
+        letter = (m.group("id") or "").lower()
+
+        # Start list mode only on 'a.' (treat lone 'i.' etc. as nested content).
+        if not in_lower_alpha:
+            if letter == "a":
+                flush()
+                current = [p]
+                in_lower_alpha = True
+                expected_ord = ord("b")
+            else:
+                current.append(p)
+            continue
+
+        # In list mode: split only when letters are in sequence (b, c, d...).
+        if expected_ord is not None and ord(letter) == expected_ord:
+            flush()
+            current = [p]
+            expected_ord += 1
+        else:
+            # Out-of-sequence "lettered" line is likely nested or OCR artifact.
+            current.append(p)
+
+    flush()
     return segments
 
 
@@ -613,7 +1071,7 @@ def _pack_units_by_word_budget(units: List[str], min_words: int, max_words: int)
 
 
 def _extract_top_clause_heading_id(text: str, article_id: str) -> Optional[str]:
-    first = text.splitlines()[0].strip()
+    first = _normalize_clause_spacing(text.splitlines()[0].strip())
     m = TOP_CLAUSE_HEADING_RE.match(first)
     if not m:
         return None
@@ -622,6 +1080,14 @@ def _extract_top_clause_heading_id(text: str, article_id: str) -> Optional[str]:
     if not clause_id.startswith(f"{article_id}."):
         return None
     return clause_id
+
+
+def _normalize_clause_spacing(s: str) -> str:
+    """
+    OCR sometimes inserts spaces around dots in clause ids, e.g. 'B1. 4.1'.
+    Normalise 'dot spacing' so regexes can match reliably.
+    """
+    return re.sub(r"\s*\.\s*", ".", s)
 
 
 def _clean_block_text(text: str) -> str:

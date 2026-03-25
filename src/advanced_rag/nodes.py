@@ -116,7 +116,7 @@ def relevance_judge_node(state: AdvancedRagState, *, client: OpenAI, model: str)
         {
             "query": state["resolved_query"],
             "chunks": [
-                {"id": c["id"], "text": c["text"][:900], "metadata": c.get("metadata", {})}
+                {"id": c["id"], "text": c["text"][:5000], "metadata": c.get("metadata", {})}
                 for c in chunks
             ],
         },
@@ -135,7 +135,7 @@ def reference_resolver_node(state: AdvancedRagState, *, client: OpenAI, model: s
     payload = json.dumps(
         {
             "query": state["resolved_query"],
-            "chunks": [{"id": c["id"], "text": c["text"][:1200]} for c in filtered],
+            "chunks": [{"id": c["id"], "text": c["text"][:5000]} for c in filtered],
         },
         ensure_ascii=True,
     )
