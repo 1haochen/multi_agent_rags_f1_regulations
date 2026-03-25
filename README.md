@@ -115,7 +115,7 @@ flowchart LR
   F --> G[Answer synthesizer agent\nproduce grounded answer]
   G --> H[Answer check agent\nverify support]
   H -->|supported| I[Return answer + citations]
-  H -->|not supported & retry_count < 1| D
+  H -->|not supported & retry_count < 1: planner + hint, increase top_k| C
 ```
 
 Implementation pointers:
