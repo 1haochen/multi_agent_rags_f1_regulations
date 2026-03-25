@@ -98,6 +98,7 @@ class AdvancedRegulationAssistant:
             "answer_supported": False,
             "support_notes": "",
             "retry_count": 0,
+            "top_k": 8,
         }
 
     def ask(

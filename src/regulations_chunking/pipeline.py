@@ -1098,6 +1098,9 @@ def _clean_block_text(text: str) -> str:
         return ""
     lines = [" ".join(line.split()) for line in text.splitlines()]
     lines = [ln for ln in lines if ln]
+    # # Drop OCR artifacts that are just bullets/separators.
+    # junk = {"*", "•", "·", "⋅", "■", "▪", "–", "-", "—", "―"}
+    # lines = [ln for ln in lines if not (len(ln) <= 2 and ln.strip() in junk)]
     return "\n".join(lines).strip()
 
 

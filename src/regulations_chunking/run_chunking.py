@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Iterable, List
 
+from tqdm import tqdm
 from .model import ChunkingConfig
 from .parser import load_pages
 from .pipeline import build_chunks

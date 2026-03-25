@@ -106,7 +106,8 @@ def query_planner_node(state: AdvancedRagState, *, client: OpenAI, model: str) -
 
 def retriever_node(state: AdvancedRagState, *, retriever: Any, top_k: int) -> Dict[str, Any]:
     explicit_ids = list(dict.fromkeys(state.get("active_clause_ids", []) + state.get("active_article_ids", [])))
-    docs = retriever.retrieve(state["rewritten_query"], explicit_ids=explicit_ids, top_k=top_k)
+    effective_top_k = int(state.get("top_k", top_k))
+    docs = retriever.retrieve(state["rewritten_query"], explicit_ids=explicit_ids, top_k=effective_top_k)
     return {"retrieved_chunks": [_obj_to_doc(x) for x in docs]}
 
 
@@ -163,7 +164,7 @@ def answer_synthesizer_node(
     client: OpenAI,
     openai_model: str,
 ) -> Dict[str, Any]:
-    context = _render_chunks(state.get("final_context_chunks", []), max_chars=9000)
+    context = _render_chunks(state.get("final_context_chunks", []), max_chars=20000)
     payload = json.dumps(
         {"query": state["resolved_query"], "query_type": state.get("query_type", ""), "context": context},
         ensure_ascii=True,
@@ -199,4 +200,5 @@ def answer_check_node(state: AdvancedRagState, *, client: OpenAI, model: str) ->
         base = state.get("rewritten_query", state["resolved_query"])
         updates["rewritten_query"] = f"{base}. Also resolve: {hint}" if hint else base
         updates["retry_count"] = state.get("retry_count", 0) + 1
+        updates["top_k"] = max(int(state.get("top_k", 8)), 12)
     return updates

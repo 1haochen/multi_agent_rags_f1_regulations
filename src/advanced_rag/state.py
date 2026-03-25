@@ -37,3 +37,4 @@ class AdvancedRagState(TypedDict):
     answer_supported: bool
     support_notes: str
     retry_count: int
+    top_k: int

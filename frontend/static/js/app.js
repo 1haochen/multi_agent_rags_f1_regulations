@@ -169,6 +169,19 @@ formEl.addEventListener("submit", async (e) => {
     body.classList.remove("is-streaming");
 
     if (metaPayload) {
+      // If the model cited chunks like "[Chunk 1]" or "[1]", rewrite them into
+      // clause-level citations from retrieval metadata (e.g., "[E1.2]").
+      if (Array.isArray(metaPayload.citations) && metaPayload.citations.length) {
+        const rewritten = rewriteChunkCitationsToClauses(
+          fullAnswer,
+          metaPayload.citations
+        );
+        if (rewritten !== fullAnswer) {
+          fullAnswer = rewritten;
+          body.textContent = fullAnswer;
+        }
+      }
+
       meta.hidden = false;
       const rows = [];
       if (metaPayload.resolved_query) {
@@ -195,10 +208,8 @@ formEl.addEventListener("submit", async (e) => {
         const cites = metaPayload.citations
           .slice(0, 8)
           .map((c, i) => {
-            const clause =
-              c.clause || c.article || c.appendix || "—";
-            const src = c.source_file ? truncate(c.source_file, 48) : "—";
-            return `${i + 1}. ${escapeHtml(String(clause))} · ${escapeHtml(src)}`;
+            const clause = bestClauseLabel(c);
+            return `${i + 1}. ${escapeHtml(String(clause))}`;
           })
           .join("<br/>");
         rows.push(`<div class="msg__meta-row"><strong>Citations</strong><br/>${cites}</div>`);
@@ -228,4 +239,47 @@ function escapeHtml(s) {
 function truncate(s, n) {
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + "…";
+}
+
+function bestClauseLabel(c) {
+  return c?.clause || c?.article || c?.appendix || "—";
+}
+
+/**
+ * Rewrites "[Chunk 1]" / "[1]" (and comma-separated lists) into clause IDs
+ * from metaPayload.citations, e.g. "[E1.2]".
+ *
+ * This does not invent citations; it only rewrites ones already present
+ * in the answer text.
+ */
+function rewriteChunkCitationsToClauses(answer, citations) {
+  const idxToClause = new Map();
+  citations.forEach((c, i) => {
+    idxToClause.set(i + 1, String(bestClauseLabel(c)));
+  });
+
+  // Examples matched:
+  // - [1]
+  // - [Chunk 1]
+  // - [Chunk 1, Chunk 2]
+  // - [1, 3]
+  const re =
+    /\[(?:Chunks?\s*)?(?:Chunk\s*)?(\d+(?:\s*,\s*(?:(?:Chunk\s*)?\d+))*)\]/g;
+
+  return answer.replace(re, (_m, group) => {
+    const nums = String(group)
+      .split(",")
+      .map((x) => x.replace(/Chunk\s*/i, "").trim())
+      .map((x) => Number.parseInt(x, 10))
+      .filter((n) => Number.isFinite(n) && n > 0);
+
+    if (!nums.length) return _m;
+
+    const clauses = nums
+      .map((n) => idxToClause.get(n))
+      .filter((x) => x && x !== "—");
+
+    if (!clauses.length) return _m;
+    return `[${clauses.join(", ")}]`;
+  });
 }
