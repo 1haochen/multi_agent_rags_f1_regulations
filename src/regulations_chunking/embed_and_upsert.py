@@ -41,7 +41,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--model-name",
         type=str,
-        default="BAAI/bge-large-en-v1.5",
+        default=(os.environ.get("EMBEDDING_MODEL") or "BAAI/bge-base-en"),
         help="SentenceTransformer model name.",
     )
     parser.add_argument(
@@ -117,13 +117,14 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--store-text-in-metadata",
-        action="store_true",
-        help="Store truncated chunk text in Pinecone metadata for direct retrieval.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Store truncated chunk text in Pinecone metadata for direct retrieval (default: enabled).",
     )
     parser.add_argument(
         "--metadata-text-max-chars",
         type=int,
-        default=1200,
+        default=5000,
         help="Max characters for text stored in metadata when enabled.",
     )
     return parser.parse_args(list(argv) if argv is not None else None)

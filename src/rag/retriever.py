@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +33,7 @@ class RagRetriever:
     def __init__(
         self,
         *,
-        model_name: str = "BAAI/bge-large-en-v1.5",
+        model_name: str = (os.environ.get("EMBEDDING_MODEL") or "BAAI/bge-base-en"),
         index_name: Optional[str] = None,
         host: Optional[str] = None,
         namespace: Optional[str] = None,
@@ -63,53 +62,15 @@ class RagRetriever:
             else pc.Index(name=self.index_name)
         )
 
-    def _hydrate_text(self, vector_id: str, metadata: Dict[str, Any]) -> Optional[str]:
+    def _hydrate_text(self, metadata: Dict[str, Any]) -> Optional[str]:
+        """
+        Return chunk text from Pinecone metadata only.
+
+        This project now treats Pinecone as the sole source of retrieved text; we do not
+        read local `chunks/` JSONL files to "hydrate" missing text.
+        """
         chunk_text = metadata.get("chunk_text")
-        if isinstance(chunk_text, str) and chunk_text.strip():
-            return chunk_text.strip()
-
-        source_file = metadata.get("source_file")
-        if not source_file:
-            return None
-        chunk_path = self.chunks_root / str(source_file)
-        if not chunk_path.exists():
-            return None
-
-        source_row = metadata.get("source_row")
-        if isinstance(source_row, int):
-            with chunk_path.open("r", encoding="utf-8") as f:
-                for row_idx, line in enumerate(f):
-                    if row_idx != source_row:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        return None
-                    text = (row.get("text") or "").strip() if isinstance(row, dict) else ""
-                    return text or None
-            return None
-
-        # Backward compatibility when older vectors have no source_row.
-        with chunk_path.open("r", encoding="utf-8") as f:
-            for row_idx, line in enumerate(f):
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(row, dict):
-                    continue
-                text = (row.get("text") or "").strip()
-                if not text:
-                    continue
-                row_meta = _safe_metadata(
-                    row.get("metadata") if isinstance(row, dict) else {},
-                    source_file=str(source_file),
-                    source_row=row_idx,
-                )
-                row_vector_id = make_vector_id(str(source_file), row_idx, row_meta)
-                if row_vector_id == vector_id:
-                    return text
-        return None
+        return chunk_text.strip() if isinstance(chunk_text, str) and chunk_text.strip() else None
 
     def retrieve(self, query: str, top_k: int = 5) -> List[RetrievalResult]:
         query_vec = self.model.encode(
@@ -144,7 +105,75 @@ class RagRetriever:
                     id=vector_id,
                     score=float(row.get("score", 0.0)),
                     metadata=metadata,
-                    text=self._hydrate_text(vector_id, metadata),
+                    text=self._hydrate_text(metadata),
                 )
             )
+        return out
+
+    def retrieve_by_reference_id(self, ref_id: str, *, top_k: int = 3) -> List[RetrievalResult]:
+        """
+        Retrieve chunks from Pinecone by matching common regulation id fields in metadata.
+
+        This is meant for **reference expansion** (e.g. "see Article 3.2", "E12.4", "Appendix 4"),
+        and intentionally does **not** fall back to reading local `chunks/` files for text. It
+        expects the index to have `chunk_text` stored in metadata (see upsert flag
+        `--store-text-in-metadata`).
+        """
+        rid = (ref_id or "").strip()
+        if not rid:
+            return []
+
+        # A vector is still required by Pinecone's query API; we use a neutral vector and rely on metadata filtering.
+        dim = int(getattr(self.model, "get_sentence_embedding_dimension", lambda: 0)() or 0)
+        if dim <= 0:
+            probe = self.model.encode(
+                ["query: dimension probe"],
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )[0].tolist()
+            dim = len(probe)
+        vector = [0.0] * dim
+
+        filters = [
+            {"parent_clause_id": {"$eq": rid}},
+            {"article_id": {"$eq": rid}},
+            {"appendix_id": {"$eq": rid}},
+            {"clause_ids": {"$in": [rid]}},
+        ]
+
+        out: List[RetrievalResult] = []
+        seen: set[str] = set()
+        for f in filters:
+            kwargs: Dict[str, Any] = {
+                "vector": vector,
+                "top_k": top_k,
+                "include_metadata": True,
+                "include_values": False,
+                "filter": f,
+            }
+            if self.namespace:
+                kwargs["namespace"] = self.namespace
+            response = self.index.query(**kwargs)
+            matches = (
+                response.get("matches", [])
+                if isinstance(response, dict)
+                else getattr(response, "matches", [])
+            )
+            for m in matches:
+                row = m if isinstance(m, dict) else m.to_dict()
+                vector_id = row.get("id", "")
+                if not vector_id or vector_id in seen:
+                    continue
+                seen.add(vector_id)
+                metadata = row.get("metadata", {}) or {}
+                text = metadata.get("chunk_text")
+                out.append(
+                    RetrievalResult(
+                        id=vector_id,
+                        score=float(row.get("score", 0.0)),
+                        metadata=metadata,
+                        text=text.strip() if isinstance(text, str) and text.strip() else None,
+                    )
+                )
         return out

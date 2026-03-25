@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .retriever import RagRetriever
+import os
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -14,7 +15,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--model-name",
         type=str,
-        default="BAAI/bge-large-en-v1.5",
+        default=(os.environ.get("EMBEDDING_MODEL") or "BAAI/bge-base-en"),
         help="Embedding model for query encoding.",
     )
     parser.add_argument(
@@ -39,7 +40,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--chunks-root",
         type=Path,
         default=Path("chunks"),
-        help="Local chunk directory used for text hydration.",
+        help="(Deprecated) Previously used for local text hydration; retrieval now uses Pinecone metadata only.",
     )
     parser.add_argument(
         "--text-max-chars",

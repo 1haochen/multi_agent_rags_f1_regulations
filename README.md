@@ -103,7 +103,7 @@ Paths are relative to the repo root.
 │       └── run.py                 # CLI entry for the full multi-agent pipeline
 ├── requirements.txt               # Python dependencies (see PyTorch / Paddle notes inside)
 ├── qwen2.5_lora_fine_tuned.ipynb # LoRA fine-tuning workflow (Qwen)
-├── evalutation.ipynb              # Evaluation / analysis notebook
+├── evaluation.ipynb               # Evaluation / analysis notebook
 └── test_questions.md              # Example questions (optional)
 ```
 

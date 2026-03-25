@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.rag.retriever import RagRetriever
 
@@ -33,68 +33,6 @@ def _metadata_matches_ids(meta: Dict[str, Any], wanted: set[str]) -> bool:
     return bool(wanted.intersection(searchable))
 
 
-class LocalClauseIndex:
-    """
-    On-disk exact lookup by clause / article / appendix id.
-
-    **Important:** We stream JSONL files and stop after ``limit`` hits. We do **not**
-    load the entire ``chunks/`` tree into RAM (that was causing multi-minute stalls on
-    large corpora — and ``exact_lookup`` used to call full load even when ``ids`` was empty).
-    """
-
-    def __init__(self, chunks_root: str | Path = "chunks") -> None:
-        self.chunks_root = Path(chunks_root)
-
-    def exact_lookup(self, ids: Iterable[str], limit: int = 6) -> List[ChunkDocObj]:
-        wanted = {x.strip() for x in ids if x.strip()}
-        if not wanted:
-            return []
-
-        hits: List[ChunkDocObj] = []
-        if not self.chunks_root.is_dir():
-            return hits
-
-        for path in sorted(self.chunks_root.glob("**/*.chunks.jsonl")):
-            rel = str(path.relative_to(self.chunks_root))
-            try:
-                with path.open("r", encoding="utf-8") as f:
-                    for idx, line in enumerate(f):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            row = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if not isinstance(row, dict):
-                            continue
-                        text = (row.get("text") or "").strip()
-                        meta_raw = row.get("metadata")
-                        if not text or not isinstance(meta_raw, dict):
-                            continue
-                        if not _metadata_matches_ids(meta_raw, wanted):
-                            continue
-                        metadata = {
-                            "source_file": rel,
-                            "source_row": idx,
-                            **meta_raw,
-                        }
-                        hits.append(
-                            ChunkDocObj(
-                                id=f"local::{rel}::{idx}",
-                                score=1.2,
-                                text=text,
-                                metadata=metadata,
-                                source="exact",
-                            )
-                        )
-                        if len(hits) >= limit:
-                            return hits
-            except OSError:
-                continue
-        return hits
-
-
 def extract_ids(text: str) -> List[str]:
     ids = [m.group(0).strip() for m in ID_PATTERN.finditer(text or "")]
     ids.extend(m.group(0).strip() for m in APPENDIX_PATTERN.finditer(text or ""))
@@ -117,7 +55,7 @@ class HybridRetriever:
         host: Optional[str] = None,
         namespace: Optional[str] = None,
         chunks_root: str | Path = "chunks",
-        model_name: str = "BAAI/bge-large-en-v1.5",
+        model_name: str = (os.environ.get("EMBEDDING_MODEL") or "BAAI/bge-base-en"),
     ) -> None:
         self.semantic = RagRetriever(
             model_name=model_name,
@@ -126,7 +64,39 @@ class HybridRetriever:
             namespace=namespace,
             chunks_root=chunks_root,
         )
-        self.local_index = LocalClauseIndex(chunks_root=chunks_root)
+
+    def retrieve_references_from_pinecone(self, refs: List[str], *, limit: int = 6) -> List[ChunkDocObj]:
+        """
+        Expand context by retrieving referenced clause/article/appendix IDs from Pinecone metadata.
+
+        This avoids using local `chunks/` files during reference expansion.
+        """
+        wanted = [x.strip() for x in (refs or []) if x and x.strip()]
+        if not wanted:
+            return []
+
+        docs: List[ChunkDocObj] = []
+        seen: set[str] = set()
+        for rid in wanted:
+            hits = self.semantic.retrieve_by_reference_id(rid, top_k=max(2, limit // 2))
+            for h in hits:
+                if h.id in seen:
+                    continue
+                if not (h.text or "").strip():
+                    continue
+                seen.add(h.id)
+                docs.append(
+                    ChunkDocObj(
+                        id=h.id,
+                        score=float(h.score),
+                        text=h.text or "",
+                        metadata=h.metadata,
+                        source="reference",
+                    )
+                )
+                if len(docs) >= limit:
+                    return docs
+        return docs
 
     def retrieve(self, query: str, explicit_ids: List[str], top_k: int = 8) -> List[ChunkDocObj]:
         sem = self.semantic.retrieve(query, top_k=top_k)
@@ -141,7 +111,8 @@ class HybridRetriever:
             for r in sem
             if (r.text or "").strip()
         ]
-        exact_docs = self.local_index.exact_lookup(explicit_ids, limit=max(2, top_k // 2))
+        # Expand any explicit IDs (clause/article/appendix) via Pinecone metadata filters only.
+        exact_docs = self.retrieve_references_from_pinecone(explicit_ids, limit=max(2, top_k // 2))
         merged: Dict[str, ChunkDocObj] = {}
         for d in sem_docs + exact_docs:
             if d.id not in merged or d.score > merged[d.id].score:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
 from dotenv import load_dotenv
@@ -12,10 +11,6 @@ from .graph import build_advanced_rag_graph
 from .memory import SessionMemoryStore
 from .retrieval import HybridRetriever
 from .state import AdvancedRagState, ChunkDoc
-
-# Repository root (parent of ``src/``)
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
 
 @dataclass
 class AdvancedRagResponse:
@@ -37,16 +32,7 @@ class AdvancedRegulationAssistant:
         namespace: Optional[str] = None,
         chunks_root: str = "chunks",
         top_k: int = 8,
-        answer_synthesizer_backend: Literal["openai", "local_qwen"] = "openai",
         answer_synthesizer_openai_model: Optional[str] = None,
-        qwen_adapter_path: Optional[str] = None,
-        qwen_use_base_only: bool = False,
-        qwen_base_model: Optional[str] = None,
-        qwen_max_new_tokens: int = 1024,
-        qwen_device_map: Optional[str] = "auto",
-        qwen_torch_dtype: Optional[str] = None,
-        qwen_merge_adapters: bool = True,
-        qwen_do_sample: bool = False,
     ) -> None:
         load_dotenv()
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -54,8 +40,7 @@ class AdvancedRegulationAssistant:
             raise RuntimeError("Missing OPENAI_API_KEY in environment or .env")
         self.client = OpenAI(api_key=api_key)
         self.model = llm_model
-        self.answer_synthesizer_backend = answer_synthesizer_backend
-        self.qwen_use_base_only = False
+        self.answer_synthesizer_backend: Literal["openai"] = "openai"
         self.memory = SessionMemoryStore(max_turns=6)
         self.retriever = HybridRetriever(
             index_name=index_name or os.environ.get("PINECONE_INDEX_NAME"),
@@ -64,36 +49,6 @@ class AdvancedRegulationAssistant:
             chunks_root=chunks_root,
         )
 
-        qwen_synthesizer = None
-        if answer_synthesizer_backend == "local_qwen":
-            from .local_qwen_synthesizer import get_shared_qwen_synthesizer
-
-            base_only = qwen_use_base_only or os.environ.get(
-                "ADVANCED_RAG_QWEN_BASE_ONLY", ""
-            ).strip().lower() in ("1", "true", "yes")
-            synth_kw = dict(
-                base_model_name_or_path=qwen_base_model,
-                max_new_tokens=qwen_max_new_tokens,
-                device_map=qwen_device_map,
-                torch_dtype=qwen_torch_dtype,
-                merge_adapters=qwen_merge_adapters,
-                do_sample=qwen_do_sample,
-            )
-            if base_only:
-                self.qwen_use_base_only = True
-                qwen_synthesizer = get_shared_qwen_synthesizer(None, **synth_kw)
-            else:
-                adapter = (
-                    Path(qwen_adapter_path).expanduser().resolve()
-                    if qwen_adapter_path
-                    else (REPO_ROOT / "models" / "Qwen2.5-1.5B-lora")
-                )
-                qwen_synthesizer = get_shared_qwen_synthesizer(adapter, **synth_kw)
-        elif answer_synthesizer_backend != "openai":
-            raise ValueError(
-                f"answer_synthesizer_backend must be 'openai' or 'local_qwen', got {answer_synthesizer_backend!r}"
-            )
-
         synth_openai = answer_synthesizer_openai_model or llm_model
         self.graph = build_advanced_rag_graph(
             client=self.client,
@@ -101,7 +56,6 @@ class AdvancedRegulationAssistant:
             retriever=self.retriever,
             top_k=top_k,
             synthesizer_openai_model=synth_openai,
-            qwen_synthesizer=qwen_synthesizer,
         )
 
     def _initial_state(

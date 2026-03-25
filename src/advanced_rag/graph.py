@@ -24,7 +24,6 @@ def build_advanced_rag_graph(
     retriever: object,
     top_k: int = 8,
     synthesizer_openai_model: Optional[str] = None,
-    qwen_synthesizer: Optional[Any] = None,
 ) -> Callable[[AdvancedRagState], AdvancedRagState]:
     graph = StateGraph(AdvancedRagState)
 
@@ -44,7 +43,6 @@ def build_advanced_rag_graph(
             s,
             client=client,
             openai_model=synth_model,
-            qwen_synthesizer=qwen_synthesizer,
         ),
     )
     graph.add_node("answer_check_agent", lambda s: answer_check_node(s, client=client, model=model))

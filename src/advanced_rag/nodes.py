@@ -145,7 +145,7 @@ def reference_resolver_node(state: AdvancedRagState, *, client: OpenAI, model: s
     for c in filtered:
         refs.extend(extract_ids(c["text"]))
     refs = list(dict.fromkeys(refs))
-    ref_docs = retriever.local_index.exact_lookup(refs, limit=6) if refs else []
+    ref_docs = retriever.retrieve_references_from_pinecone(refs, limit=6) if refs else []
     referenced_chunks = [_obj_to_doc(x) for x in ref_docs]
     merged: Dict[str, ChunkDoc] = {c["id"]: c for c in filtered}
     for c in referenced_chunks:
@@ -162,25 +162,13 @@ def answer_synthesizer_node(
     *,
     client: OpenAI,
     openai_model: str,
-    qwen_synthesizer: Any | None = None,
 ) -> Dict[str, Any]:
-    # Local Qwen used to use a very small budget (6500 chars), which often dropped the
-    # chunk that contained the answer → empty JSON / "I do not know". Prefer a larger window;
-    # override with ADVANCED_RAG_QWEN_CONTEXT_CHARS (integer) if needed.
-    if qwen_synthesizer is not None:
-        raw = os.environ.get("ADVANCED_RAG_QWEN_CONTEXT_CHARS", "").strip()
-        ctx_limit = int(raw) if raw.isdigit() else 12000
-    else:
-        ctx_limit = 9000
-    context = _render_chunks(state.get("final_context_chunks", []), max_chars=ctx_limit)
+    context = _render_chunks(state.get("final_context_chunks", []), max_chars=9000)
     payload = json.dumps(
         {"query": state["resolved_query"], "query_type": state.get("query_type", ""), "context": context},
         ensure_ascii=True,
     )
-    if qwen_synthesizer is not None:
-        data = qwen_synthesizer.synthesize_json(ANSWER_SYNTHESIZER_PROMPT, payload)
-    else:
-        data = _json_response(client, model=openai_model, system=ANSWER_SYNTHESIZER_PROMPT, user=payload)
+    data = _json_response(client, model=openai_model, system=ANSWER_SYNTHESIZER_PROMPT, user=payload)
     ans_out = (data.get("answer") or "").strip()
     if not ans_out:
         ans_out = "I do not know based on the retrieved context."

@@ -23,7 +23,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--embedding-model",
         type=str,
-        default="BAAI/bge-large-en-v1.5",
+        default=(os.environ.get("EMBEDDING_MODEL") or "BAAI/bge-base-en"),
         help="Embedding model for retrieval queries.",
     )
     parser.add_argument(
@@ -48,7 +48,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--chunks-root",
         type=str,
         default="chunks",
-        help="Local chunk folder for text hydration.",
+        help="(Deprecated) Previously used for local text hydration; retrieval now uses Pinecone metadata only.",
     )
     parser.add_argument(
         "--max-context-chars",
